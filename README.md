@@ -20,5 +20,10 @@ $ pip install --upgrade pip
 $ pip install -r requirements.txt
 ```
 
-4
+4 - To run a package
+```
+$ cd Package/<Choose Package>
+$ jupyter notebook
+```
+
 
