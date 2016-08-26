@@ -22,7 +22,7 @@ $ pip install -r requirements.txt
 
 4 - To run a package
 ```
-$ cd Package/<Choose Package>
+$ cd Packages/<Choose Package>
 $ jupyter notebook
 ```
 
