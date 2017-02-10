@@ -18,6 +18,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
 fi
 
 export RESULTSPATH=$WORKSPACE/Results
+export PYTHONPATH=$PYTHONPATH:$WORKSPACE/Functions
 
 # Folder Configuration
 if [ -d "$RESULTSPATH" ]; then
