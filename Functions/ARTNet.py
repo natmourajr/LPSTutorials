@@ -24,7 +24,7 @@ class ARTNet(object):
 	ARTNet class
 		This class implement the Adaptive Resonance Theory
 	"""		
-	def __init__(self, n_clusters=2, similarity_radius=0.1, dist="euclidean", randonize=True, dev=True):
+	def __init__(self, n_clusters=2, similarity_radius=0.1, dist="euclidean", randomize=True, dev=True):
 		"""
 		ARTNet constructor
 			n_clusters: Number of cluster to be used (default: 2)
@@ -38,7 +38,7 @@ class ARTNet(object):
 		self.cluster_last_used = None
 		self.similarity_radius = similarity_radius
 		self.dist = dist
-		self.randonize = randonize
+		self.randomize = randomize
 		self.dev = dev
         
 	def calc_dist(self,pt1, pt2):
@@ -47,14 +47,18 @@ class ARTNet(object):
         
 	def create_cluster(self,new_cluster):
 		if self.clusters is None:
-			self.clusters = new_cluster
+			self.clusters = new_cluster[:,np.newaxis].T
 		else:
-			self.clusters = np.append(self.clusters,new_cluster,axis=1)
-        
-	def update_cluster(self, cluster_id, event):
-		self.clusters[:,cluster_id] = (self.clusters[:,cluster_id] + 
-                                       self.learning_rate*
-                                       (self.clusters[:,cluster_id]-event))
+			if len(self.clusters.shape) == 1:
+				self.clusters = np.append(self.clusters[:,np.newaxis].T,new_cluster[:,np.newaxis].T,axis=0)
+			else:
+				self.clusters = np.append(self.clusters,new_cluster[:,np.newaxis].T,axis=0)
+                
+                
+	def update_cluster(self, cluster_id, event, trn_params):
+		self.clusters[cluster_id,:] = (self.clusters[cluster_id,:] + 
+                                       trn_params.learning_rate*
+                                       (event-self.clusters[cluster_id,:]))
 
 	def fit(self, data, trn_params=None):
 		if trn_params is None:
@@ -63,7 +67,7 @@ class ARTNet(object):
 		if self.dev:
 			trn_params.Print()
             
-		if self.randonize:
+		if self.randomize:
 			if data.shape[0] < data.shape[1]:
 				trn_data = data[:,np.random.permutation(data.shape[1])].T
 			else:
@@ -73,27 +77,18 @@ class ARTNet(object):
 				trn_data = data.T
 			else:
 				trn_data = data
-                
+		print "Number of events:",trn_data.shape[0]
 		for ievent in range(trn_data.shape[0]):
+			#print 'ievent: ',ievent
 			if self.clusters is None:
 				self.create_cluster(trn_data[ievent,:])
 			else:
-				# how to create a new cluster?!
-				if len(self.clusters.shape) == 1:
-					# compare with the first cluster
-					print trn_data[ievent,:]
-					print self.clusters
-					dist = self.calc_dist(trn_data[ievent,:],self.clusters)
-					if dist > self.similarity_radius:
-						self.create_cluster(trn_data[ievent,:])
-					else:
-						self.update_cluster(0,trn_data[ievent,:])
+				mat_dist = np.zeros([self.clusters.shape[0]])
+				for icluster in range(self.clusters.shape[0]):
+					mat_dist[icluster] = self.calc_dist(trn_data[ievent],self.clusters[icluster,:])
+				if np.min(mat_dist) > self.similarity_radius:
+					self.create_cluster(trn_data[ievent,:])
 				else:
-					mat_dist = np.zeros([])
-					for icluster in range(self.clusters.shape[1]):
-						mat_dist[icluster] = self.calc_dist(trn_data[ievent,:],self.clusters[icluster,:])
-					if np.min(mat_dist) > self.similarity_radius:
-						self.create_cluster(trn_data[ievent,:])
-                        
-
+					update_cluster_id = np.argmin(mat_dist)
+					self.update_cluster(update_cluster_id,data[ievent,:],trn_params=trn_params)
                 
