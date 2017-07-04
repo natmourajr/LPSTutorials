@@ -6,15 +6,18 @@ import numpy as np
 
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation
-from keras.optimizers import SGD
+from keras.optimizers import SGD, RMSprop, Adadelta, Adam
 import keras.callbacks as callbacks
 from keras.utils import np_utils
-from keras.layers import Merge
+from keras.layers import Merge, Concatenate, concatenate
+from keras.models import load_model
+
+from sklearn.externals import joblib
 
 from keras import backend as K
 
 class TrnParams(object):
-	def __init__(self, learning_rate=0.01, 
+	def __init__(self, learning_rate=0.001,
 	learning_decay=1e-6, momentum=0.3, 
 	nesterov=True, train_verbose=False, verbose= False, 
 	n_epochs=500,batch_size=8):
@@ -93,16 +96,16 @@ class PCDIndependent(object):
 				my_model = Sequential()
 				
 				# add a linear layer to isolate the input of NN model
-				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], init='identity',trainable=False))
+				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], kernel_initializer='identity',trainable=False))
 				
 				my_model.add(Activation('linear'))
 				
 				# add a non-linear single neuron layer to compress all information
-				my_model.add(Dense(1, input_dim=data.shape[1], init='uniform'))
+				my_model.add(Dense(1, input_dim=data.shape[1], kernel_initializer='uniform'))
 				my_model.add(Activation('tanh'))
 				
 				# add a non-linear output layer with max sparse target shape
-				my_model.add(Dense(target.shape[1], init='uniform')) 
+				my_model.add(Dense(target.shape[1], kernel_initializer='uniform'))
 				my_model.add(Activation('tanh'))
 				
 				# creating a optimization function using steepest gradient
@@ -119,7 +122,7 @@ class PCDIndependent(object):
 				
 				# Train model
 				init_trn_desc = my_model.fit(data[train_ids], target[train_ids],
-                                          		  nb_epoch=trn_params.n_epochs, 
+                                          		  epochs=trn_params.n_epochs, 
                                           		  batch_size=trn_params.batch_size,
                                           		  callbacks=[earlyStopping], 
                                           		  verbose=trn_params.train_verbose,
@@ -135,21 +138,23 @@ class PCDIndependent(object):
 				my_model = Sequential()
 				
 				# add a linear layer to isolate the input of NN model
-				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], init='identity',trainable=False))
+				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], kernel_initializer='identity',trainable=False))
 				
 				my_model.add(Activation('linear'))
 				
 				# add a non-linear single neuron layer to compress all information
-				my_model.add(Dense(1, input_dim=data.shape[1], init='uniform'))
+				my_model.add(Dense(1, input_dim=data.shape[1], kernel_initializer='uniform'))
 				my_model.add(Activation('tanh'))
 				
 				# add a non-linear output layer with max sparse target shape
-				my_model.add(Dense(target.shape[1], init='uniform')) 
+				my_model.add(Dense(target.shape[1], kernel_initializer='uniform')) 
 				my_model.add(Activation('tanh'))
 			
 				# creating a optimization function using steepest gradient
-				sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay, 
-                          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
+                #sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay,
+                #          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
+				sgd = Adam(lr=trn_params.learning_rate,decay=trn_params.learning_decay, 
+                           beta_1=0.9, beta_2=0.999, epsilon=1e-08)
 				
 				# compile the model
 				my_model.compile(loss='mean_squared_error', optimizer=sgd, metrics=['accuracy','mean_squared_error'])
@@ -184,7 +189,7 @@ class PCDIndependent(object):
 				
 				# Train model
 				init_trn_desc = my_model.fit(data_with_proj[train_ids], target[train_ids],
-                                          		  nb_epoch=trn_params.n_epochs, 
+                                          		  epochs=trn_params.n_epochs, 
                                           		  batch_size=trn_params.batch_size,
                                           		  callbacks=[earlyStopping], 
                                           		  verbose=trn_params.train_verbose,
@@ -197,7 +202,26 @@ class PCDIndependent(object):
 				if trn_params.verbose:
 					print 'PCD %i - Train process is done, val_cost: %1.5f'%(ipcd+1,np.min(init_trn_desc.history['val_loss']))
 		return self
+    
+	def save(self, path=".",filename="pcd_indep_obj"):
+		# save models
+		for i in self.models:
+			self.models[i].save('%s/%s_pcd_%i.h5'%(path,filename,i))
+		# save trn_descs and comp
+		for i in self.trn_descs:
+			joblib.dump([self.trn_descs[i].history],'%s/%s_trn_desc_pcd_%i.jbl'%(path,filename,i),compress=9)
+		# save number of comp
+		joblib.dump([self.n_components],'%s/%s_n_components.jbl'%(path,filename))
+		return 0
 
+	def load(self, path=".",filename="pcd_indep_obj"):
+		# load number of comp
+		self.n_components = joblib.load('%s/%s_n_components.jbl'%(path,filename))[0]
+		# load pcds
+		for i in range(self.n_components):
+			self.models[i] = load_model('%s/%s_pcd_%i.h5'%(path,filename,i))
+		return 0
+    
 	def transform_with_activation_function(self, data):
 		"""
 			PCD Independent auxiliar transform function
@@ -280,7 +304,7 @@ class PCDCooperative(object):
 		self.trn_descs = {}
 		self.pcds = {}
 		
-	def fit(self, data, target, train_ids, test_ids, trn_params=None):
+	def fit(self, data, target, train_ids, test_ids, trn_params=None, save_model=True):
 		"""
 		PCD Cooperative fit function
 			data: data to be fitted (events x features)
@@ -308,24 +332,28 @@ class PCDCooperative(object):
 				my_model = Sequential()
 				
 				# add a linear layer to isolate the input of NN model
-				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], init='identity',trainable=False))
+				my_model.add(Dense(data.shape[1],input_dim=data.shape[1], 
+                                   kernel_initializer='identity',trainable=False))
 				
 				my_model.add(Activation('linear'))
 				
 				# add a non-linear single neuron layer to compress all information
-				my_model.add(Dense(1, input_dim=data.shape[1], init='uniform'))
+				my_model.add(Dense(1, input_dim=data.shape[1], kernel_initializer='uniform'))
 				my_model.add(Activation('tanh'))
 				
 				# add a non-linear output layer with max sparse target shape
-				my_model.add(Dense(target.shape[1], init='uniform')) 
+				my_model.add(Dense(target.shape[1], kernel_initializer='uniform')) 
 				my_model.add(Activation('tanh'))
 				
 				# creating a optimization function using steepest gradient
-				sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay, 
-                          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
-				
+				#sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay, 
+                #          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
+				sgd = Adam(lr=trn_params.learning_rate,decay=trn_params.learning_decay, 
+                           beta_1=0.9, beta_2=0.999, epsilon=1e-08)
+
 				# compile the model
-				my_model.compile(loss='mean_squared_error', optimizer=sgd, metrics=['accuracy','mean_squared_error'])
+				my_model.compile(loss='mean_squared_error', optimizer=sgd, 
+                                 metrics=['accuracy','mean_squared_error'])
 				
 				# early stopping to avoid overtraining
 				earlyStopping = callbacks.EarlyStopping(monitor='val_loss', 
@@ -334,7 +362,7 @@ class PCDCooperative(object):
 				
 				# Train model
 				init_trn_desc = my_model.fit(data[train_ids], target[train_ids],
-                                          		  nb_epoch=trn_params.n_epochs, 
+                                          		  epochs=trn_params.n_epochs, 
                                           		  batch_size=trn_params.batch_size,
                                           		  callbacks=[earlyStopping], 
                                           		  verbose=trn_params.train_verbose,
@@ -348,6 +376,8 @@ class PCDCooperative(object):
 					print 'PCD %i - Train process is done, val_cost: %1.5f'%(ipcd+1,np.min(init_trn_desc.history['val_loss']))
 			else:
 				my_model = Sequential()
+				#my_model.add(Dense(data.shape[1],input_dim=data.shape[1], 
+                #                   kernel_initializer='identity',trainable=False))
 				
 				#  I removed the linear layer to allow freeze!!!				
 				# add a non-linear freeze previous extracted pcd
@@ -367,18 +397,20 @@ class PCDCooperative(object):
 				non_freeze_layer.add(Dense(1, input_dim=data.shape[1]))
 
 				# merge everything
-				merged = Merge([freeze_layer, non_freeze_layer], mode='concat')
+				merged = Merge([freeze_layer, non_freeze_layer])
 				my_model.add(merged)
-				my_model.add(Activation('tanh'))				
+				my_model.add(Activation('tanh'))
 
 				# add a non-linear output layer with max sparse target shape
-				my_model.add(Dense(target.shape[1], init='uniform')) 
+				my_model.add(Dense(target.shape[1], kernel_initializer='uniform')) 
 				my_model.add(Activation('tanh'))
 			
 				# creating a optimization function using steepest gradient
-				sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay, 
-                          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
-				
+				#sgd = SGD(lr=trn_params.learning_rate, decay=trn_params.learning_decay, 
+                #          		  momentum=trn_params.momentum, nesterov=trn_params.nesterov)
+				sgd = Adam(lr=trn_params.learning_rate,decay=trn_params.learning_decay, 
+                           beta_1=0.9, beta_2=0.999, epsilon=1e-08)
+                
 				# compile the model
 				my_model.compile(loss='mean_squared_error', optimizer=sgd, metrics=['accuracy','mean_squared_error'])
 				
@@ -388,7 +420,7 @@ class PCDCooperative(object):
                                                         mode='auto')
 				# Train model
 				init_trn_desc = my_model.fit([data[train_ids], data[train_ids]], target[train_ids],
-                                          		  nb_epoch=trn_params.n_epochs, 
+                                          		  epochs=trn_params.n_epochs, 
                                           		  batch_size=trn_params.batch_size,
                                           		  callbacks=[earlyStopping], 
                                           		  verbose=trn_params.train_verbose,
@@ -401,6 +433,26 @@ class PCDCooperative(object):
 				if trn_params.verbose:
 					print 'PCD %i - Train process is done, val_cost: %1.5f'%(ipcd+1,np.min(init_trn_desc.history['val_loss']))
 		return self
+    
+	def save(self, path=".",filename="pcd_coop_obj"):
+		# save models
+		for i in self.models:
+			self.models[i].save('%s/%s_pcd_%i.h5'%(path,filename,i))
+		# save trn_descs and comp
+		for i in self.trn_descs:
+			joblib.dump([self.trn_descs[i].history],'%s/%s_trn_desc_pcd_%i.jbl'%(path,filename,i),compress=9)
+		# save number of comp
+		joblib.dump([self.n_components],'%s/%s_n_components.jbl'%(path,filename))
+		return 0
+
+	def load(self, path=".",filename="pcd_coop_obj"):
+		# load number of comp
+		self.n_components = joblib.load('%s/%s_n_components.jbl'%(path,filename))[0]
+		# load pcds
+		for i in range(self.n_components):
+			self.models[i] = load_model('%s/%s_pcd_%i.h5'%(path,filename,i))
+		return 0
+
 
 	def transform_with_activation_function(self, data):
 		"""
@@ -473,3 +525,59 @@ class PCDCooperative(object):
 					degree = degree - 180
 				degree_matrix[ipcd,jpcd] = np.abs(degree)
 		return degree_matrix
+
+class NLPCA(object):
+	"""
+	Non-Linear Principal Component Analysis class
+		This class implement the Non-Linear Principal Component Analysis
+	"""	
+	def __init__(self, n_components=2,n_neurons_encoder=2):
+		"""
+		NLPCA constructor
+			n_components: number of components to be extracted
+            n_neurons_encoder: number of neurons in encoder and decoder layers
+		"""
+		self.n_components = n_components
+		self.n_neurons_encoder = n_neurons_encoder
+		self.models = {}
+		self.trn_descs = {}
+		self.nlpcas = {}
+		
+	def fit(self, data, train_ids, test_ids, trn_params=None):
+		"""
+		NLPCA fit function
+			data: data to be fitted (events x features)
+			train_ids:  train indexes - user generated
+			test_ids: test indexes - user generated
+			trn_params: class TrnParams (optional)
+		"""		
+		print 'NLPCA fit function'
+
+		if trn_params is None:
+			trn_params = TrnParams()
+		
+		#print 'Train Parameters'	
+		#trn_params.Print()
+		
+		if trn_params.verbose: 
+			print 'NLPCA Model Struct: %i - %i - %i - %i - %i'%(data.shape[1],self.n_neurons_encoder,
+                                                      self.n_components,n_neurons_encoder,
+                                                      data.shape[1])
+		return self
+    
+	def save(self, path=".",filename="nlpca_obj"):
+		# save models
+		self.models.save('%s/%s.h5'%(path,filename))
+		# save trn_descs and comp
+		joblib.dump([self.trn_descs[i].history],'%s/%s_trn_desc_nlpca.jbl'%(path,filename),compress=9)
+		# save number of comp
+		joblib.dump([self.n_components, self.n_neurons_encoder],'%s/%s_n_components.jbl'%(path,filename))
+		return 0
+
+	def load(self, path=".",filename="pcd_indep_obj"):
+		# load number of comp
+		[self.n_components, self.n_neurons_encoder] = joblib.load('%s/%s_n_components.jbl'%(path,filename))
+		# load models
+		self.models = load_model('%s/%s.h5'%(path,filename))
+		return 0
+    
